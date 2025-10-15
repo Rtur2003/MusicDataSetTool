@@ -1,0 +1,39 @@
+# Core Audio Processing
+librosa>=0.10.0
+soundfile>=0.12.1
+pydub>=0.25.1
+audioread>=3.0.0
+
+# Machine Learning & Deep Learning
+tensorflow>=2.13.0
+scikit-learn>=1.3.0
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Music Information Retrieval
+essentia>=2.1b6.dev1034
+madmom>=0.16.1
+
+# API Integrations
+spotipy>=2.23.0
+google-api-python-client>=2.95.0
+google-auth-httplib2>=0.1.0
+google-auth-oauthlib>=1.0.0
+requests>=2.31.0
+
+# Data Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.15.0
+
+# Utilities
+python-dotenv>=1.0.0
+tqdm>=4.65.0
+joblib>=1.3.0
+
+# Music Theory
+music21>=9.1.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
