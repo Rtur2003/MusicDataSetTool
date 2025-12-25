@@ -5,15 +5,22 @@ Combines all features: audio analysis, genre classification, mood detection, and
 
 import os
 import json
+from pathlib import Path
 from typing import Dict, Optional, List
 from datetime import datetime
 
-from features.audio_features import AudioFeatureExtractor
-from models.genre_classifier import GenreClassifier
-from models.mood_analyzer import MoodAnalyzer
-from integrations.spotify_integration import SpotifyIntegration
-from integrations.youtube_integration import YouTubeIntegration
-from integrations.apple_music_integration import AppleMusicIntegration
+from .features.audio_features import AudioFeatureExtractor
+from .models.genre_classifier import GenreClassifier
+from .models.mood_analyzer import MoodAnalyzer
+from .integrations.spotify_integration import SpotifyIntegration
+from .integrations.youtube_integration import YouTubeIntegration
+from .integrations.apple_music_integration import AppleMusicIntegration
+from .utils.logger import get_logger
+from .utils.exceptions import MusicAnalyzerError, ValidationError
+from .utils.validators import validate_file_path, validate_positive_int
+from .config import get_config
+
+logger = get_logger(__name__)
 
 
 class MusicAnalyzer:
@@ -22,34 +29,51 @@ class MusicAnalyzer:
     and external API integrations
     """
 
-    def __init__(self, model_dir: Optional[str] = None):
+    def __init__(self, model_dir: Optional[str] = None, config: Optional[object] = None):
         """
         Initialize the music analyzer
 
         Args:
             model_dir: Directory containing trained models
+            config: Optional configuration object
         """
-        # Initialize components
-        self.feature_extractor = AudioFeatureExtractor()
-        self.genre_classifier = GenreClassifier()
-        self.mood_analyzer = MoodAnalyzer()
+        self.config = config or get_config()
+        
+        if model_dir is None:
+            model_dir = str(self.config.model.model_dir)
+            
+        logger.info("Initializing MusicAnalyzer")
+        
+        try:
+            self.feature_extractor = AudioFeatureExtractor(
+                sample_rate=self.config.audio.sample_rate,
+                n_mfcc=self.config.audio.n_mfcc
+            )
+            self.genre_classifier = GenreClassifier()
+            self.mood_analyzer = MoodAnalyzer()
 
-        # Load models if available
-        if model_dir and os.path.exists(model_dir):
-            try:
-                self.genre_classifier.load_model(model_dir)
-            except:
-                print("Genre classifier model not found. Using rule-based prediction.")
+            if model_dir and os.path.exists(model_dir):
+                try:
+                    self.genre_classifier.load_model(model_dir)
+                    logger.info("Genre classifier model loaded successfully")
+                except Exception as e:
+                    logger.warning(f"Genre classifier model not found: {str(e)}")
 
-            try:
-                self.mood_analyzer.load_model(model_dir)
-            except:
-                print("Mood analyzer model not found. Using rule-based prediction.")
+                try:
+                    self.mood_analyzer.load_model(model_dir)
+                    logger.info("Mood analyzer model loaded successfully")
+                except Exception as e:
+                    logger.warning(f"Mood analyzer model not found: {str(e)}")
 
-        # Initialize API integrations
-        self.spotify = SpotifyIntegration()
-        self.youtube = YouTubeIntegration()
-        self.apple_music = AppleMusicIntegration()
+            self.spotify = SpotifyIntegration()
+            self.youtube = YouTubeIntegration()
+            self.apple_music = AppleMusicIntegration()
+            
+            logger.info("MusicAnalyzer initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize MusicAnalyzer: {str(e)}")
+            raise MusicAnalyzerError(f"Initialization failed: {str(e)}")
 
     def analyze_audio_file(self, file_path: str, include_apis: bool = False) -> Dict:
         """
@@ -61,46 +85,61 @@ class MusicAnalyzer:
 
         Returns:
             Complete analysis dictionary
+            
+        Raises:
+            MusicAnalyzerError: If analysis fails
         """
-        print(f"\n{'='*60}")
-        print(f"Analyzing: {os.path.basename(file_path)}")
-        print(f"{'='*60}\n")
-
-        analysis = {
-            'file_path': file_path,
-            'analysis_timestamp': datetime.now().isoformat(),
-            'status': 'success'
-        }
-
         try:
-            # 1. Extract audio features
-            print("📊 Extracting audio features...")
-            features = self.feature_extractor.extract_all_features(file_path)
+            path = validate_file_path(file_path, must_exist=True)
+            file_name = path.name
+            
+            logger.info(f"{'='*60}")
+            logger.info(f"Analyzing: {file_name}")
+            logger.info(f"{'='*60}")
+
+            analysis = {
+                'file_path': str(path),
+                'analysis_timestamp': datetime.now().isoformat(),
+                'status': 'success'
+            }
+
+            logger.info("Extracting audio features...")
+            features = self.feature_extractor.extract_all_features(str(path))
             analysis['audio_features'] = features
 
-            # 2. Classify genre
-            print("🎸 Classifying genre...")
+            logger.info("Classifying genre...")
             genre_result = self.genre_classifier.predict(features)
             analysis['genre'] = genre_result
 
-            # 3. Analyze mood
-            print("😊 Analyzing mood...")
+            logger.info("Analyzing mood...")
             mood_result = self.mood_analyzer.predict(features)
             analysis['mood'] = mood_result
 
-            # 4. API integrations (optional)
             if include_apis:
-                analysis['api_data'] = self._fetch_api_data(file_path)
+                logger.info("Fetching API data...")
+                analysis['api_data'] = self._fetch_api_data(str(path))
 
-            # 5. Generate summary
             analysis['summary'] = self._generate_summary(analysis)
+            
+            logger.info("Analysis completed successfully")
+            return analysis
 
+        except (ValidationError, MusicAnalyzerError) as e:
+            logger.error(f"Analysis failed: {str(e)}")
+            return {
+                'file_path': file_path,
+                'analysis_timestamp': datetime.now().isoformat(),
+                'status': 'error',
+                'error': str(e)
+            }
         except Exception as e:
-            analysis['status'] = 'error'
-            analysis['error'] = str(e)
-            print(f"❌ Error during analysis: {e}")
-
-        return analysis
+            logger.error(f"Unexpected error during analysis: {str(e)}", exc_info=True)
+            return {
+                'file_path': file_path,
+                'analysis_timestamp': datetime.now().isoformat(),
+                'status': 'error',
+                'error': f"Unexpected error: {str(e)}"
+            }
 
     def _fetch_api_data(self, file_path: str) -> Dict:
         """
@@ -113,46 +152,52 @@ class MusicAnalyzer:
             Dictionary with API data
         """
         api_data = {}
+        track_name = Path(file_path).stem
 
-        # Extract track name from filename (basic approach)
-        track_name = os.path.splitext(os.path.basename(file_path))[0]
+        try:
+            if self.spotify.sp:
+                logger.info("Searching Spotify...")
+                try:
+                    spotify_results = self.spotify.search_track(track_name, limit=3)
+                    if spotify_results:
+                        api_data['spotify'] = {
+                            'search_results': spotify_results,
+                            'top_match': spotify_results[0] if spotify_results else None
+                        }
 
-        # Spotify
-        if self.spotify.sp:
-            print("🎵 Searching Spotify...")
-            spotify_results = self.spotify.search_track(track_name, limit=3)
-            if spotify_results:
-                api_data['spotify'] = {
-                    'search_results': spotify_results,
-                    'top_match': spotify_results[0] if spotify_results else None
-                }
+                        track_id = spotify_results[0]['id']
+                        audio_features = self.spotify.get_audio_features(track_id)
+                        if audio_features:
+                            api_data['spotify']['audio_features'] = audio_features
+                except Exception as e:
+                    logger.warning(f"Spotify search failed: {str(e)}")
 
-                # Get audio features for top match
-                if spotify_results:
-                    track_id = spotify_results[0]['id']
-                    audio_features = self.spotify.get_audio_features(track_id)
-                    if audio_features:
-                        api_data['spotify']['audio_features'] = audio_features
+            if self.youtube.youtube:
+                logger.info("Searching YouTube...")
+                try:
+                    youtube_results = self.youtube.search_music(track_name, max_results=3)
+                    if youtube_results:
+                        api_data['youtube'] = {
+                            'search_results': youtube_results,
+                            'top_match': youtube_results[0] if youtube_results else None
+                        }
+                except Exception as e:
+                    logger.warning(f"YouTube search failed: {str(e)}")
 
-        # YouTube
-        if self.youtube.youtube:
-            print("📺 Searching YouTube...")
-            youtube_results = self.youtube.search_music(track_name, max_results=3)
-            if youtube_results:
-                api_data['youtube'] = {
-                    'search_results': youtube_results,
-                    'top_match': youtube_results[0] if youtube_results else None
-                }
-
-        # Apple Music
-        if self.apple_music.token:
-            print("🍎 Searching Apple Music...")
-            apple_results = self.apple_music.search_songs(track_name, limit=3)
-            if apple_results:
-                api_data['apple_music'] = {
-                    'search_results': apple_results,
-                    'top_match': apple_results[0] if apple_results else None
-                }
+            if self.apple_music.token:
+                logger.info("Searching Apple Music...")
+                try:
+                    apple_results = self.apple_music.search_songs(track_name, limit=3)
+                    if apple_results:
+                        api_data['apple_music'] = {
+                            'search_results': apple_results,
+                            'top_match': apple_results[0] if apple_results else None
+                        }
+                except Exception as e:
+                    logger.warning(f"Apple Music search failed: {str(e)}")
+                    
+        except Exception as e:
+            logger.error(f"Error fetching API data: {str(e)}")
 
         return api_data
 
@@ -285,29 +330,39 @@ class MusicAnalyzer:
 
         Returns:
             List of analysis dictionaries
+            
+        Raises:
+            ValidationError: If file_paths is invalid
         """
+        if not file_paths:
+            raise ValidationError("file_paths cannot be empty")
+            
+        logger.info(f"Batch Analysis: {len(file_paths)} files")
         results = []
 
-        print(f"\n🎵 Batch Analysis: {len(file_paths)} files\n")
-
         for i, file_path in enumerate(file_paths, 1):
-            print(f"\n[{i}/{len(file_paths)}] Processing: {os.path.basename(file_path)}")
+            logger.info(f"[{i}/{len(file_paths)}] Processing: {Path(file_path).name}")
             try:
                 analysis = self.analyze_audio_file(file_path, include_apis=False)
                 results.append(analysis)
             except Exception as e:
-                print(f"❌ Error processing {file_path}: {e}")
+                logger.error(f"Error processing {file_path}: {str(e)}")
                 results.append({
                     'file_path': file_path,
                     'status': 'error',
                     'error': str(e)
                 })
 
-        # Save results if output file specified
         if output_file:
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(results, f, indent=2, ensure_ascii=False)
-            print(f"\n✅ Results saved to: {output_file}")
+            try:
+                output_path = Path(output_file)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(results, f, indent=2, ensure_ascii=False)
+                logger.info(f"Results saved to: {output_file}")
+            except Exception as e:
+                logger.error(f"Failed to save results: {str(e)}")
 
         return results
 
@@ -320,20 +375,35 @@ class MusicAnalyzer:
             analysis: Analysis dictionary
             output_path: Output file path
             format: Export format ('json', 'txt')
+            
+        Raises:
+            ValidationError: If format is invalid
+            MusicAnalyzerError: If export fails
         """
-        if format == 'json':
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(analysis, f, indent=2, ensure_ascii=False)
+        if format not in ['json', 'txt']:
+            raise ValidationError(f"Invalid format: {format}. Must be 'json' or 'txt'")
+            
+        try:
+            output_file = Path(output_path)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            if format == 'json':
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(analysis, f, indent=2, ensure_ascii=False)
 
-        elif format == 'txt':
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(analysis.get('summary', ''))
-                f.write("\n\n" + "="*60 + "\n")
-                f.write("FULL ANALYSIS DATA\n")
-                f.write("="*60 + "\n\n")
-                f.write(json.dumps(analysis, indent=2, ensure_ascii=False))
+            elif format == 'txt':
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    f.write(analysis.get('summary', ''))
+                    f.write("\n\n" + "="*60 + "\n")
+                    f.write("FULL ANALYSIS DATA\n")
+                    f.write("="*60 + "\n\n")
+                    f.write(json.dumps(analysis, indent=2, ensure_ascii=False))
 
-        print(f"✅ Analysis exported to: {output_path}")
+            logger.info(f"Analysis exported to: {output_path}")
+            
+        except Exception as e:
+            logger.error(f"Failed to export analysis: {str(e)}")
+            raise MusicAnalyzerError(f"Export failed: {str(e)}")
 
     def compare_tracks(self, file_paths: List[str]) -> Dict:
         """
@@ -344,22 +414,32 @@ class MusicAnalyzer:
 
         Returns:
             Comparison dictionary
+            
+        Raises:
+            ValidationError: If number of tracks is invalid
         """
         if len(file_paths) < 2:
-            raise ValueError("Need at least 2 tracks to compare")
+            raise ValidationError("Need at least 2 tracks to compare")
 
         if len(file_paths) > 5:
-            print("Warning: Comparing more than 5 tracks. Limiting to first 5.")
+            logger.warning("Comparing more than 5 tracks. Limiting to first 5.")
             file_paths = file_paths[:5]
 
+        logger.info(f"Comparing {len(file_paths)} tracks")
         analyses = []
+        
         for file_path in file_paths:
             analysis = self.analyze_audio_file(file_path, include_apis=False)
-            analyses.append(analysis)
+            if analysis['status'] == 'success':
+                analyses.append(analysis)
+            else:
+                logger.warning(f"Skipping {file_path} due to analysis error")
 
-        # Compare features
+        if len(analyses) < 2:
+            raise MusicAnalyzerError("Not enough successful analyses to compare")
+
         comparison = {
-            'tracks': [os.path.basename(a['file_path']) for a in analyses],
+            'tracks': [Path(a['file_path']).name for a in analyses],
             'genres': [a['genre']['predicted_genre'] for a in analyses],
             'moods': [a['mood']['predicted_mood'] for a in analyses],
             'bpms': [a['audio_features']['bpm'] for a in analyses],
