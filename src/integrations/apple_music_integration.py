@@ -10,6 +10,13 @@ from typing import Dict, List, Optional
 import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+from pathlib import Path
+
+from ..utils.logger import get_logger
+from ..utils.exceptions import APIError, ValidationError
+from ..utils.validators import validate_positive_int
+
+logger = get_logger(__name__)
 
 
 class AppleMusicIntegration:
@@ -38,28 +45,35 @@ class AppleMusicIntegration:
         self.token_expiry = None
 
         if not all([self.key_id, self.team_id, self.private_key_path]):
-            print("Warning: Apple Music credentials not found. Some features may be limited.")
+            logger.warning("Apple Music credentials not found. Apple Music features will be disabled.")
         else:
             try:
                 self._generate_token()
+                logger.info("Apple Music integration initialized successfully")
             except Exception as e:
-                print(f"Error generating Apple Music token: {e}")
+                logger.error(f"Failed to generate Apple Music token: {str(e)}")
 
     def _generate_token(self):
-        """Generate a developer token for Apple Music API"""
+        """
+        Generate a developer token for Apple Music API
+        
+        Raises:
+            APIError: If token generation fails
+        """
         if not all([self.key_id, self.team_id, self.private_key_path]):
-            return
+            raise APIError("Missing Apple Music credentials")
 
         try:
-            # Read private key
-            with open(self.private_key_path, 'r') as key_file:
+            key_path = Path(self.private_key_path)
+            if not key_path.exists():
+                raise APIError(f"Private key file not found: {self.private_key_path}")
+                
+            with open(key_path, 'r') as key_file:
                 private_key = key_file.read()
 
-            # Token expires in 6 months (maximum allowed)
             expiry_time = datetime.now() + timedelta(days=180)
             self.token_expiry = expiry_time
 
-            # Create JWT
             headers = {
                 'alg': 'ES256',
                 'kid': self.key_id
@@ -72,11 +86,14 @@ class AppleMusicIntegration:
             }
 
             self.token = jwt.encode(payload, private_key, algorithm='ES256', headers=headers)
+            logger.info("Apple Music token generated successfully")
 
         except FileNotFoundError:
-            print(f"Private key file not found: {self.private_key_path}")
+            logger.error(f"Private key file not found: {self.private_key_path}")
+            raise APIError(f"Private key file not found: {self.private_key_path}")
         except Exception as e:
-            print(f"Error generating token: {e}")
+            logger.error(f"Token generation failed: {str(e)}")
+            raise APIError(f"Token generation failed: {str(e)}")
 
     def _get_headers(self) -> Dict:
         """Get headers for API requests"""
@@ -132,30 +149,46 @@ class AppleMusicIntegration:
 
         Returns:
             List of song information dictionaries
+            
+        Raises:
+            ValidationError: If parameters are invalid
+            APIError: If API request fails
         """
+        if not query or not query.strip():
+            raise ValidationError("Search query cannot be empty")
+            
+        validate_positive_int(limit, "limit", min_value=1)
+        
         results = self.search(query, types=['songs'], limit=limit)
 
         if not results or 'results' not in results:
+            logger.warning(f"No results found for query: {query}")
             return []
 
         songs = []
-        for song in results['results'].get('songs', {}).get('data', []):
-            attributes = song['attributes']
-            songs.append({
-                'id': song['id'],
-                'name': attributes['name'],
-                'artist': attributes['artistName'],
-                'album': attributes['albumName'],
-                'duration_ms': attributes.get('durationInMillis'),
-                'release_date': attributes.get('releaseDate'),
-                'genre': attributes.get('genreNames', []),
-                'isrc': attributes.get('isrc'),
-                'preview_url': attributes.get('previews', [{}])[0].get('url'),
-                'artwork_url': attributes.get('artwork', {}).get('url'),
-                'url': attributes.get('url')
-            })
+        try:
+            for song in results['results'].get('songs', {}).get('data', []):
+                attributes = song['attributes']
+                songs.append({
+                    'id': song['id'],
+                    'name': attributes['name'],
+                    'artist': attributes['artistName'],
+                    'album': attributes['albumName'],
+                    'duration_ms': attributes.get('durationInMillis'),
+                    'release_date': attributes.get('releaseDate'),
+                    'genre': attributes.get('genreNames', []),
+                    'isrc': attributes.get('isrc'),
+                    'preview_url': attributes.get('previews', [{}])[0].get('url'),
+                    'artwork_url': attributes.get('artwork', {}).get('url'),
+                    'url': attributes.get('url')
+                })
 
-        return songs
+            logger.debug(f"Found {len(songs)} songs for query: {query}")
+            return songs
+            
+        except (KeyError, IndexError, TypeError) as e:
+            logger.error(f"Error parsing Apple Music response: {str(e)}")
+            raise APIError(f"Error parsing Apple Music response: {str(e)}")
 
     def get_song(self, song_id: str, storefront: str = 'us') -> Optional[Dict]:
         """

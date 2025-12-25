@@ -10,17 +10,24 @@ from tensorflow.keras import layers, models
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from typing import Dict, List, Tuple, Optional
+from pathlib import Path
 import joblib
 import os
+
+from ..utils.logger import get_logger
+from ..utils.exceptions import ModelError, ValidationError
+from ..utils.constants import (
+    GENRES, NEURAL_NETWORK_LAYERS, DROPOUT_RATES, LEARNING_RATE,
+    EARLY_STOPPING_PATIENCE, REDUCE_LR_PATIENCE, REDUCE_LR_FACTOR, MIN_LEARNING_RATE
+)
+
+logger = get_logger(__name__)
 
 
 class GenreClassifier:
     """Deep learning model for music genre classification"""
 
-    GENRES = [
-        'rock', 'pop', 'jazz', 'classical', 'hip-hop',
-        'electronic', 'country', 'blues', 'reggae', 'metal'
-    ]
+    GENRES = GENRES
 
     def __init__(self, model_path: Optional[str] = None):
         """
@@ -34,9 +41,14 @@ class GenreClassifier:
         self.label_encoder = LabelEncoder()
         self.label_encoder.fit(self.GENRES)
         self.is_trained = False
+        
+        logger.info("GenreClassifier initialized")
 
         if model_path and os.path.exists(model_path):
-            self.load_model(model_path)
+            try:
+                self.load_model(model_path)
+            except Exception as e:
+                logger.warning(f"Failed to load model from {model_path}: {str(e)}")
 
     def build_model(self, input_dim: int) -> keras.Model:
         """
@@ -47,37 +59,46 @@ class GenreClassifier:
 
         Returns:
             Compiled Keras model
+            
+        Raises:
+            ModelError: If model building fails
         """
-        model = models.Sequential([
-            # Input layer
-            layers.Dense(512, activation='relu', input_shape=(input_dim,)),
-            layers.BatchNormalization(),
-            layers.Dropout(0.3),
+        try:
+            layers_config = NEURAL_NETWORK_LAYERS
+            dropout_config = DROPOUT_RATES
+            
+            model = models.Sequential([
+                layers.Dense(layers_config[0], activation='relu', input_shape=(input_dim,)),
+                layers.BatchNormalization(),
+                layers.Dropout(dropout_config[0]),
 
-            # Hidden layers
-            layers.Dense(256, activation='relu'),
-            layers.BatchNormalization(),
-            layers.Dropout(0.3),
+                layers.Dense(layers_config[1], activation='relu'),
+                layers.BatchNormalization(),
+                layers.Dropout(dropout_config[1]),
 
-            layers.Dense(128, activation='relu'),
-            layers.BatchNormalization(),
-            layers.Dropout(0.2),
+                layers.Dense(layers_config[2], activation='relu'),
+                layers.BatchNormalization(),
+                layers.Dropout(dropout_config[2]),
 
-            layers.Dense(64, activation='relu'),
-            layers.BatchNormalization(),
-            layers.Dropout(0.2),
+                layers.Dense(layers_config[3], activation='relu'),
+                layers.BatchNormalization(),
+                layers.Dropout(dropout_config[3]),
 
-            # Output layer
-            layers.Dense(len(self.GENRES), activation='softmax')
-        ])
+                layers.Dense(len(self.GENRES), activation='softmax')
+            ])
 
-        model.compile(
-            optimizer=keras.optimizers.Adam(learning_rate=0.001),
-            loss='sparse_categorical_crossentropy',
-            metrics=['accuracy']
-        )
-
-        return model
+            model.compile(
+                optimizer=keras.optimizers.Adam(learning_rate=LEARNING_RATE),
+                loss='sparse_categorical_crossentropy',
+                metrics=['accuracy']
+            )
+            
+            logger.info(f"Model built with {input_dim} input features")
+            return model
+            
+        except Exception as e:
+            logger.error(f"Failed to build model: {str(e)}")
+            raise ModelError(f"Model building failed: {str(e)}")
 
     def prepare_features(self, features: Dict) -> np.ndarray:
         """
@@ -133,44 +154,61 @@ class GenreClassifier:
 
         Returns:
             Training history dictionary
+            
+        Raises:
+            ValidationError: If input validation fails
+            ModelError: If training fails
         """
-        # Scale features
-        X_scaled = self.scaler.fit_transform(X)
+        if X.shape[0] != y.shape[0]:
+            raise ValidationError(f"X and y must have same number of samples: {X.shape[0]} != {y.shape[0]}")
+            
+        if X.shape[0] < 10:
+            raise ValidationError("Need at least 10 samples for training")
+            
+        if not 0 < validation_split < 1:
+            raise ValidationError(f"validation_split must be between 0 and 1, got {validation_split}")
+            
+        try:
+            logger.info(f"Training genre classifier with {X.shape[0]} samples, {X.shape[1]} features")
+            
+            X_scaled = self.scaler.fit_transform(X)
+            y_encoded = self.label_encoder.transform(y)
 
-        # Encode labels
-        y_encoded = self.label_encoder.transform(y)
+            self.model = self.build_model(X.shape[1])
 
-        # Build model
-        self.model = self.build_model(X.shape[1])
+            callbacks = [
+                keras.callbacks.EarlyStopping(
+                    monitor='val_loss',
+                    patience=EARLY_STOPPING_PATIENCE,
+                    restore_best_weights=True
+                ),
+                keras.callbacks.ReduceLROnPlateau(
+                    monitor='val_loss',
+                    factor=REDUCE_LR_FACTOR,
+                    patience=REDUCE_LR_PATIENCE,
+                    min_lr=MIN_LEARNING_RATE
+                )
+            ]
 
-        # Callbacks
-        callbacks = [
-            keras.callbacks.EarlyStopping(
-                monitor='val_loss',
-                patience=15,
-                restore_best_weights=True
-            ),
-            keras.callbacks.ReduceLROnPlateau(
-                monitor='val_loss',
-                factor=0.5,
-                patience=5,
-                min_lr=1e-6
+            history = self.model.fit(
+                X_scaled, y_encoded,
+                validation_split=validation_split,
+                epochs=epochs,
+                batch_size=batch_size,
+                callbacks=callbacks,
+                verbose=1
             )
-        ]
 
-        # Train model
-        history = self.model.fit(
-            X_scaled, y_encoded,
-            validation_split=validation_split,
-            epochs=epochs,
-            batch_size=batch_size,
-            callbacks=callbacks,
-            verbose=1
-        )
-
-        self.is_trained = True
-
-        return history.history
+            self.is_trained = True
+            logger.info("Training completed successfully")
+            
+            return history.history
+            
+        except (ValidationError, ModelError) as e:
+            raise
+        except Exception as e:
+            logger.error(f"Training failed: {str(e)}")
+            raise ModelError(f"Training failed: {str(e)}")
 
     def predict(self, features: Dict) -> Dict:
         """
@@ -181,34 +219,45 @@ class GenreClassifier:
 
         Returns:
             Dictionary with predicted genre and probabilities
+            
+        Raises:
+            ValidationError: If features are invalid
+            ModelError: If prediction fails
         """
+        if not features:
+            raise ValidationError("Features dictionary cannot be empty")
+            
         if not self.is_trained and self.model is None:
+            logger.info("Model not trained, using rule-based prediction")
             return self._get_rule_based_prediction(features)
 
-        # Prepare features
-        X = self.prepare_features(features).reshape(1, -1)
-        X_scaled = self.scaler.transform(X)
+        try:
+            X = self.prepare_features(features).reshape(1, -1)
+            X_scaled = self.scaler.transform(X)
 
-        # Predict
-        predictions = self.model.predict(X_scaled, verbose=0)[0]
+            predictions = self.model.predict(X_scaled, verbose=0)[0]
 
-        # Get top 3 predictions
-        top_3_indices = np.argsort(predictions)[-3:][::-1]
-        top_3_genres = [self.GENRES[i] for i in top_3_indices]
-        top_3_probs = [float(predictions[i]) for i in top_3_indices]
+            top_3_indices = np.argsort(predictions)[-3:][::-1]
+            top_3_genres = [self.GENRES[i] for i in top_3_indices]
+            top_3_probs = [float(predictions[i]) for i in top_3_indices]
 
-        return {
-            'predicted_genre': top_3_genres[0],
-            'confidence': top_3_probs[0],
-            'top_3_predictions': [
-                {'genre': genre, 'probability': prob}
-                for genre, prob in zip(top_3_genres, top_3_probs)
-            ],
-            'all_probabilities': {
-                genre: float(predictions[i])
-                for i, genre in enumerate(self.GENRES)
+            return {
+                'predicted_genre': top_3_genres[0],
+                'confidence': top_3_probs[0],
+                'top_3_predictions': [
+                    {'genre': genre, 'probability': prob}
+                    for genre, prob in zip(top_3_genres, top_3_probs)
+                ],
+                'all_probabilities': {
+                    genre: float(predictions[i])
+                    for i, genre in enumerate(self.GENRES)
+                }
             }
-        }
+        except (ValidationError, ModelError) as e:
+            raise
+        except Exception as e:
+            logger.error(f"Prediction failed: {str(e)}")
+            raise ModelError(f"Prediction failed: {str(e)}")
 
     def _get_rule_based_prediction(self, features: Dict) -> Dict:
         """
@@ -258,21 +307,28 @@ class GenreClassifier:
         Args:
             model_dir: Directory to save the model
             model_name: Base name for the model files
+            
+        Raises:
+            ModelError: If model is not trained or save fails
         """
         if not self.is_trained:
-            raise ValueError("Model must be trained before saving")
+            raise ModelError("Model must be trained before saving")
 
-        os.makedirs(model_dir, exist_ok=True)
+        try:
+            model_path = Path(model_dir)
+            model_path.mkdir(parents=True, exist_ok=True)
 
-        # Save Keras model
-        model_path = os.path.join(model_dir, f'{model_name}.h5')
-        self.model.save(model_path)
+            model_file = model_path / f'{model_name}.h5'
+            self.model.save(str(model_file))
 
-        # Save scaler
-        scaler_path = os.path.join(model_dir, f'{model_name}_scaler.joblib')
-        joblib.dump(self.scaler, scaler_path)
+            scaler_file = model_path / f'{model_name}_scaler.joblib'
+            joblib.dump(self.scaler, str(scaler_file))
 
-        print(f"Model saved to {model_dir}")
+            logger.info(f"Model saved to {model_dir}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save model: {str(e)}")
+            raise ModelError(f"Model save failed: {str(e)}")
 
     def load_model(self, model_dir: str, model_name: str = 'genre_classifier'):
         """
@@ -281,21 +337,31 @@ class GenreClassifier:
         Args:
             model_dir: Directory containing the model files
             model_name: Base name of the model files
+            
+        Raises:
+            ModelError: If model files not found or load fails
         """
-        # Load Keras model
-        model_path = os.path.join(model_dir, f'{model_name}.h5')
-        if os.path.exists(model_path):
-            self.model = keras.models.load_model(model_path)
+        try:
+            model_path = Path(model_dir) / f'{model_name}.h5'
+            if not model_path.exists():
+                raise ModelError(f"Model not found at {model_path}")
+                
+            self.model = keras.models.load_model(str(model_path))
             self.is_trained = True
-        else:
-            raise FileNotFoundError(f"Model not found at {model_path}")
 
-        # Load scaler
-        scaler_path = os.path.join(model_dir, f'{model_name}_scaler.joblib')
-        if os.path.exists(scaler_path):
-            self.scaler = joblib.load(scaler_path)
+            scaler_path = Path(model_dir) / f'{model_name}_scaler.joblib'
+            if scaler_path.exists():
+                self.scaler = joblib.load(str(scaler_path))
+            else:
+                logger.warning(f"Scaler not found at {scaler_path}")
 
-        print(f"Model loaded from {model_dir}")
+            logger.info(f"Model loaded from {model_dir}")
+            
+        except ModelError as e:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to load model: {str(e)}")
+            raise ModelError(f"Model load failed: {str(e)}")
 
     def evaluate(self, X: np.ndarray, y: np.ndarray) -> Dict:
         """

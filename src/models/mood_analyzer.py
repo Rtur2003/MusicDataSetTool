@@ -4,32 +4,30 @@ Uses scikit-learn for classifying music mood and emotional characteristics
 """
 
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
 from typing import Dict, List, Tuple, Optional
+from pathlib import Path
 import joblib
 import os
+
+from ..utils.logger import get_logger
+from ..utils.exceptions import ModelError, ValidationError
+from ..utils.constants import (
+    MOODS, VALENCE_AROUSAL_MAP,
+    RANDOM_FOREST_N_ESTIMATORS, RANDOM_FOREST_MAX_DEPTH,
+    RANDOM_FOREST_MIN_SAMPLES_SPLIT, RANDOM_FOREST_MIN_SAMPLES_LEAF
+)
+
+logger = get_logger(__name__)
 
 
 class MoodAnalyzer:
     """Machine learning model for music mood/emotion analysis"""
 
-    MOODS = [
-        'happy', 'sad', 'energetic', 'calm',
-        'angry', 'romantic', 'melancholic', 'uplifting'
-    ]
-
-    VALENCE_AROUSAL_MAP = {
-        'happy': {'valence': 0.8, 'arousal': 0.7},
-        'sad': {'valence': 0.2, 'arousal': 0.3},
-        'energetic': {'valence': 0.7, 'arousal': 0.9},
-        'calm': {'valence': 0.6, 'arousal': 0.2},
-        'angry': {'valence': 0.2, 'arousal': 0.8},
-        'romantic': {'valence': 0.7, 'arousal': 0.4},
-        'melancholic': {'valence': 0.3, 'arousal': 0.4},
-        'uplifting': {'valence': 0.9, 'arousal': 0.6}
-    }
+    MOODS = MOODS
+    VALENCE_AROUSAL_MAP = VALENCE_AROUSAL_MAP
 
     def __init__(self, model_path: Optional[str] = None):
         """
@@ -43,26 +41,39 @@ class MoodAnalyzer:
         self.label_encoder = LabelEncoder()
         self.label_encoder.fit(self.MOODS)
         self.is_trained = False
+        
+        logger.info("MoodAnalyzer initialized")
 
         if model_path and os.path.exists(model_path):
-            self.load_model(model_path)
+            try:
+                self.load_model(model_path)
+            except Exception as e:
+                logger.warning(f"Failed to load model from {model_path}: {str(e)}")
 
     def build_model(self) -> RandomForestClassifier:
         """
         Build a Random Forest classifier for mood analysis
 
         Returns:
-            Trained RandomForestClassifier
+            RandomForestClassifier instance
+            
+        Raises:
+            ModelError: If model building fails
         """
-        model = RandomForestClassifier(
-            n_estimators=200,
-            max_depth=20,
-            min_samples_split=5,
-            min_samples_leaf=2,
-            random_state=42,
-            n_jobs=-1
-        )
-        return model
+        try:
+            model = RandomForestClassifier(
+                n_estimators=RANDOM_FOREST_N_ESTIMATORS,
+                max_depth=RANDOM_FOREST_MAX_DEPTH,
+                min_samples_split=RANDOM_FOREST_MIN_SAMPLES_SPLIT,
+                min_samples_leaf=RANDOM_FOREST_MIN_SAMPLES_LEAF,
+                random_state=42,
+                n_jobs=-1
+            )
+            logger.info("Random Forest model built successfully")
+            return model
+        except Exception as e:
+            logger.error(f"Failed to build model: {str(e)}")
+            raise ModelError(f"Model building failed: {str(e)}")
 
     def prepare_features(self, features: Dict) -> np.ndarray:
         """
@@ -328,21 +339,28 @@ class MoodAnalyzer:
         Args:
             model_dir: Directory to save the model
             model_name: Base name for the model files
+            
+        Raises:
+            ModelError: If model is not trained or save fails
         """
         if not self.is_trained:
-            raise ValueError("Model must be trained before saving")
+            raise ModelError("Model must be trained before saving")
 
-        os.makedirs(model_dir, exist_ok=True)
+        try:
+            model_path = Path(model_dir)
+            model_path.mkdir(parents=True, exist_ok=True)
 
-        # Save model
-        model_path = os.path.join(model_dir, f'{model_name}.joblib')
-        joblib.dump(self.model, model_path)
+            model_file = model_path / f'{model_name}.joblib'
+            joblib.dump(self.model, str(model_file))
 
-        # Save scaler
-        scaler_path = os.path.join(model_dir, f'{model_name}_scaler.joblib')
-        joblib.dump(self.scaler, scaler_path)
+            scaler_file = model_path / f'{model_name}_scaler.joblib'
+            joblib.dump(self.scaler, str(scaler_file))
 
-        print(f"Model saved to {model_dir}")
+            logger.info(f"Model saved to {model_dir}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save model: {str(e)}")
+            raise ModelError(f"Model save failed: {str(e)}")
 
     def load_model(self, model_dir: str, model_name: str = 'mood_analyzer'):
         """
@@ -351,21 +369,31 @@ class MoodAnalyzer:
         Args:
             model_dir: Directory containing the model files
             model_name: Base name of the model files
+            
+        Raises:
+            ModelError: If model files not found or load fails
         """
-        # Load model
-        model_path = os.path.join(model_dir, f'{model_name}.joblib')
-        if os.path.exists(model_path):
-            self.model = joblib.load(model_path)
+        try:
+            model_path = Path(model_dir) / f'{model_name}.joblib'
+            if not model_path.exists():
+                raise ModelError(f"Model not found at {model_path}")
+                
+            self.model = joblib.load(str(model_path))
             self.is_trained = True
-        else:
-            raise FileNotFoundError(f"Model not found at {model_path}")
 
-        # Load scaler
-        scaler_path = os.path.join(model_dir, f'{model_name}_scaler.joblib')
-        if os.path.exists(scaler_path):
-            self.scaler = joblib.load(scaler_path)
+            scaler_path = Path(model_dir) / f'{model_name}_scaler.joblib'
+            if scaler_path.exists():
+                self.scaler = joblib.load(str(scaler_path))
+            else:
+                logger.warning(f"Scaler not found at {scaler_path}")
 
-        print(f"Model loaded from {model_dir}")
+            logger.info(f"Model loaded from {model_dir}")
+            
+        except ModelError as e:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to load model: {str(e)}")
+            raise ModelError(f"Model load failed: {str(e)}")
 
     def evaluate(self, X: np.ndarray, y: np.ndarray) -> Dict:
         """
