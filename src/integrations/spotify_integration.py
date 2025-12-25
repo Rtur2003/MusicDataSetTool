@@ -9,6 +9,12 @@ from typing import Dict, List, Optional
 import os
 from dotenv import load_dotenv
 
+from ..utils.logger import get_logger
+from ..utils.exceptions import APIError, ValidationError
+from ..utils.validators import validate_positive_int
+
+logger = get_logger(__name__)
+
 
 class SpotifyIntegration:
     """Integration with Spotify Web API"""
@@ -28,7 +34,7 @@ class SpotifyIntegration:
         self.client_secret = client_secret or os.getenv('SPOTIFY_CLIENT_SECRET')
 
         if not self.client_id or not self.client_secret:
-            print("Warning: Spotify credentials not found. Some features may be limited.")
+            logger.warning("Spotify credentials not found. Spotify features will be disabled.")
             self.sp = None
         else:
             try:
@@ -37,8 +43,9 @@ class SpotifyIntegration:
                     client_secret=self.client_secret
                 )
                 self.sp = spotipy.Spotify(auth_manager=auth_manager)
+                logger.info("Spotify integration initialized successfully")
             except Exception as e:
-                print(f"Error initializing Spotify client: {e}")
+                logger.error(f"Failed to initialize Spotify client: {str(e)}")
                 self.sp = None
 
     def search_track(self, query: str, limit: int = 10) -> List[Dict]:
@@ -51,12 +58,22 @@ class SpotifyIntegration:
 
         Returns:
             List of track information dictionaries
+            
+        Raises:
+            ValidationError: If parameters are invalid
+            APIError: If API request fails
         """
+        if not query or not query.strip():
+            raise ValidationError("Search query cannot be empty")
+            
+        validate_positive_int(limit, "limit", min_value=1)
+        
         if not self.sp:
+            logger.warning("Spotify client not initialized")
             return []
 
         try:
-            results = self.sp.search(q=query, type='track', limit=limit)
+            results = self.sp.search(q=query, type='track', limit=min(limit, 50))
             tracks = []
 
             for item in results['tracks']['items']:
@@ -73,11 +90,12 @@ class SpotifyIntegration:
                 }
                 tracks.append(track_info)
 
+            logger.debug(f"Found {len(tracks)} tracks for query: {query}")
             return tracks
 
         except Exception as e:
-            print(f"Error searching tracks: {e}")
-            return []
+            logger.error(f"Spotify search failed for query '{query}': {str(e)}")
+            raise APIError(f"Spotify search failed: {str(e)}")
 
     def get_track_info(self, track_id: str) -> Optional[Dict]:
         """
@@ -88,8 +106,16 @@ class SpotifyIntegration:
 
         Returns:
             Dictionary with track information
+            
+        Raises:
+            ValidationError: If track_id is invalid
+            APIError: If API request fails
         """
+        if not track_id or not track_id.strip():
+            raise ValidationError("Track ID cannot be empty")
+            
         if not self.sp:
+            logger.warning("Spotify client not initialized")
             return None
 
         try:
@@ -110,8 +136,8 @@ class SpotifyIntegration:
             }
 
         except Exception as e:
-            print(f"Error getting track info: {e}")
-            return None
+            logger.error(f"Failed to get track info for ID '{track_id}': {str(e)}")
+            raise APIError(f"Failed to get track info: {str(e)}")
 
     def get_audio_features(self, track_id: str) -> Optional[Dict]:
         """
@@ -122,14 +148,23 @@ class SpotifyIntegration:
 
         Returns:
             Dictionary with audio features
+            
+        Raises:
+            ValidationError: If track_id is invalid
+            APIError: If API request fails
         """
+        if not track_id or not track_id.strip():
+            raise ValidationError("Track ID cannot be empty")
+            
         if not self.sp:
+            logger.warning("Spotify client not initialized")
             return None
 
         try:
             features = self.sp.audio_features(track_id)[0]
 
             if not features:
+                logger.warning(f"No audio features found for track ID: {track_id}")
                 return None
 
             return {
@@ -149,8 +184,8 @@ class SpotifyIntegration:
             }
 
         except Exception as e:
-            print(f"Error getting audio features: {e}")
-            return None
+            logger.error(f"Failed to get audio features for ID '{track_id}': {str(e)}")
+            raise APIError(f"Failed to get audio features: {str(e)}")
 
     def get_audio_analysis(self, track_id: str) -> Optional[Dict]:
         """

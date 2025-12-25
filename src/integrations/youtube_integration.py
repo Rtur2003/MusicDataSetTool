@@ -10,6 +10,12 @@ import os
 from dotenv import load_dotenv
 import re
 
+from ..utils.logger import get_logger
+from ..utils.exceptions import APIError, ValidationError
+from ..utils.validators import validate_positive_int
+
+logger = get_logger(__name__)
+
 
 class YouTubeIntegration:
     """Integration with YouTube Data API"""
@@ -26,13 +32,14 @@ class YouTubeIntegration:
         self.api_key = api_key or os.getenv('YOUTUBE_API_KEY')
 
         if not self.api_key:
-            print("Warning: YouTube API key not found. Some features may be limited.")
+            logger.warning("YouTube API key not found. YouTube features will be disabled.")
             self.youtube = None
         else:
             try:
                 self.youtube = build('youtube', 'v3', developerKey=self.api_key)
+                logger.info("YouTube integration initialized successfully")
             except Exception as e:
-                print(f"Error initializing YouTube client: {e}")
+                logger.error(f"Failed to initialize YouTube client: {str(e)}")
                 self.youtube = None
 
     def search_videos(self, query: str, max_results: int = 10,
@@ -47,8 +54,18 @@ class YouTubeIntegration:
 
         Returns:
             List of video information dictionaries
+            
+        Raises:
+            ValidationError: If parameters are invalid
+            APIError: If API request fails
         """
+        if not query or not query.strip():
+            raise ValidationError("Search query cannot be empty")
+            
+        validate_positive_int(max_results, "max_results", min_value=1)
+        
         if not self.youtube:
+            logger.warning("YouTube client not initialized")
             return []
 
         try:
@@ -56,7 +73,7 @@ class YouTubeIntegration:
                 'q': query,
                 'part': 'snippet',
                 'type': 'video',
-                'maxResults': max_results
+                'maxResults': min(max_results, 50)
             }
 
             if video_category:
@@ -79,14 +96,15 @@ class YouTubeIntegration:
                 }
                 videos.append(video_info)
 
+            logger.debug(f"Found {len(videos)} videos for query: {query}")
             return videos
 
         except HttpError as e:
-            print(f"YouTube API error: {e}")
-            return []
+            logger.error(f"YouTube API HTTP error: {str(e)}")
+            raise APIError(f"YouTube API error: {str(e)}")
         except Exception as e:
-            print(f"Error searching videos: {e}")
-            return []
+            logger.error(f"YouTube search failed for query '{query}': {str(e)}")
+            raise APIError(f"YouTube search failed: {str(e)}")
 
     def get_video_info(self, video_id: str) -> Optional[Dict]:
         """
@@ -97,8 +115,16 @@ class YouTubeIntegration:
 
         Returns:
             Dictionary with video information
+            
+        Raises:
+            ValidationError: If video_id is invalid
+            APIError: If API request fails
         """
+        if not video_id or not video_id.strip():
+            raise ValidationError("Video ID cannot be empty")
+            
         if not self.youtube:
+            logger.warning("YouTube client not initialized")
             return None
 
         try:
@@ -109,11 +135,10 @@ class YouTubeIntegration:
             response = request.execute()
 
             if not response.get('items'):
+                logger.warning(f"No video found with ID: {video_id}")
                 return None
 
             video = response['items'][0]
-
-            # Parse duration (ISO 8601 format)
             duration = self._parse_duration(video['contentDetails']['duration'])
 
             return {
@@ -135,11 +160,11 @@ class YouTubeIntegration:
             }
 
         except HttpError as e:
-            print(f"YouTube API error: {e}")
-            return None
+            logger.error(f"YouTube API HTTP error: {str(e)}")
+            raise APIError(f"YouTube API error: {str(e)}")
         except Exception as e:
-            print(f"Error getting video info: {e}")
-            return None
+            logger.error(f"Failed to get video info for ID '{video_id}': {str(e)}")
+            raise APIError(f"Failed to get video info: {str(e)}")
 
     def search_music(self, query: str, max_results: int = 10) -> List[Dict]:
         """
