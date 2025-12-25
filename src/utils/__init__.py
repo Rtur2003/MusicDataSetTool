@@ -10,6 +10,8 @@ from .exceptions import (
     APIError,
     ValidationError
 )
+from .retry import retry_with_backoff, retry_on_rate_limit
+from .cache import SimpleCache, cached
 
 __all__ = [
     'get_logger',
@@ -21,5 +23,9 @@ __all__ = [
     'FeatureExtractionError',
     'ModelError',
     'APIError',
-    'ValidationError'
+    'ValidationError',
+    'retry_with_backoff',
+    'retry_on_rate_limit',
+    'SimpleCache',
+    'cached'
 ]

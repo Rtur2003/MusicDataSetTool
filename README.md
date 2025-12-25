@@ -1,10 +1,26 @@
-# 🎵 Audio Analyzer
+# 🎵 Music Dataset Tool
 
 **A comprehensive music analysis tool combining machine learning, audio signal processing, and streaming platform integrations.**
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![TensorFlow](https://img.shields.io/badge/TensorFlow-2.13+-orange.svg)](https://www.tensorflow.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Tests](https://img.shields.io/badge/tests-pytest-yellow.svg)](https://docs.pytest.org/)
+
+---
+
+## ✨ New Features (v1.0.0)
+
+- 🛠️ **Enhanced CLI**: User-friendly command-line interface with argparse
+- 🔄 **Retry Logic**: Automatic retry with exponential backoff for API calls
+- 💾 **Caching**: File-based caching for API responses and computations
+- 🔒 **Better Error Handling**: Comprehensive exception hierarchy and validation
+- 📝 **Improved Logging**: Structured logging with multiple output formats
+- 🧪 **Unit Tests**: Comprehensive test coverage for core functionality
+- 📦 **Package Setup**: Proper setup.py for installation via pip
+- 🚀 **CI/CD**: GitHub Actions workflows for automated testing and deployment
+- 📚 **Documentation**: Complete API docs, troubleshooting guide, and contributing guidelines
 
 ---
 
@@ -82,7 +98,29 @@ cp .env.example .env
 
 ## 🎯 Usage
 
-### Basic Usage
+### Command Line Interface (NEW!)
+
+```bash
+# Analyze a single file
+music-analyze song.mp3
+
+# Analyze with API lookups
+music-analyze song.mp3 --include-apis
+
+# Batch analyze multiple files
+music-analyze song1.mp3 song2.mp3 song3.mp3 --output results.json
+
+# Compare tracks
+music-analyze --compare track1.mp3 track2.mp3 track3.mp3
+
+# Export to text format
+music-analyze song.mp3 --format txt --output analysis.txt
+
+# With custom settings
+music-analyze song.mp3 --model-dir models/ --log-level DEBUG
+```
+
+### Python API
 
 ```python
 from src.analyzer import MusicAnalyzer
@@ -100,7 +138,7 @@ print(result['summary'])
 analyzer.export_analysis(result, 'output.json', format='json')
 ```
 
-### Command Line Interface
+### Command Line Interface (Legacy)
 
 ```bash
 # Analyze a single file
@@ -396,6 +434,62 @@ audio-analyzer/
 
 ---
 
+## 🛠️ Advanced Features
+
+### Retry Logic
+
+Automatic retry with exponential backoff for API calls:
+
+```python
+from src.utils.retry import retry_with_backoff, retry_on_rate_limit
+
+@retry_with_backoff(max_retries=3, initial_delay=1.0)
+def fetch_spotify_data(track_id):
+    return spotify.get_track_info(track_id)
+```
+
+### Caching
+
+File-based caching for expensive operations:
+
+```python
+from src.utils.cache import SimpleCache, cached
+
+# Using SimpleCache
+cache = SimpleCache(cache_dir='.cache', ttl_seconds=3600)
+cache.set('key', data)
+data = cache.get('key')
+
+# Using decorator
+@cached(ttl_seconds=3600)
+def expensive_analysis(file_path):
+    return analyzer.analyze_audio_file(file_path)
+```
+
+### Custom Configuration
+
+```python
+from src.config import get_config, AudioConfig, ModelConfig
+
+config = get_config()
+config.audio.sample_rate = 44100  # Custom sample rate
+config.model.batch_size = 64       # Custom batch size
+
+analyzer = MusicAnalyzer(config=config)
+```
+
+---
+
+## 📚 Documentation
+
+- [API Documentation](API.md) - Complete API reference
+- [Troubleshooting Guide](TROUBLESHOOTING.md) - Common issues and solutions
+- [Contributing Guidelines](CONTRIBUTING.md) - How to contribute
+- [Security Policy](SECURITY.md) - Security best practices
+- [Changelog](CHANGELOG.md) - Version history
+
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please follow these steps:
@@ -405,6 +499,8 @@ Contributions are welcome! Please follow these steps:
 3. Commit your changes (`git commit -m 'Add AmazingFeature'`)
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 ---
 

@@ -70,7 +70,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'music-analyze=src.analyzer:main',
+            'music-analyze=src.cli:main',
         ],
     },
     include_package_data=True,
